@@ -1,0 +1,16 @@
+node_modules
+docs/.vuepress/dist
+git
+docs/java/*.md
+docs/java/*.java
+deploy.sh
+package.json
+spring-cloud/*
+/java/*.java
+/java/nacos/*.*
+#目录下java文件夹
+/java/*.java
+#目录下java文件夹所有内容
+/java/*.*
+.temp
+.cache
