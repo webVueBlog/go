@@ -253,7 +253,7 @@ const response = await fetch('http://localhost:8080/api/v1/chat', {
   },
   body: JSON.stringify({
     query: '什么是 LangChain？',
-    template: 'qa',
+    template: 'qa',//qa是 默认模板
     chain_mode: false
   })
 });
