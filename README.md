@@ -2,7 +2,12 @@
 
 这是一个基于 Go 后端和 Vue3 前端的 AI 应用开发工具，集成了 LangChain、RAG、Prompt Engineering 等功能。
 
+![img_2.png](./img_2.png)
+
+![img_3.png](./img_3.png)
+
 ![img_1.png](./img_1.png)
+
 
 ## 项目结构
 
