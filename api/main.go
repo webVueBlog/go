@@ -11,7 +11,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
+	"go-llm-tools/internal/auth"
 	"go-llm-tools/internal/chain"
+	"go-llm-tools/internal/chatgpt"
 	"go-llm-tools/internal/llm"
 	"go-llm-tools/internal/prompt"
 	"go-llm-tools/internal/rag"
@@ -51,13 +53,34 @@ type TemplateResponse struct {
 	Metadata  map[string]string `json:"metadata"`
 }
 
+// 认证相关请求结构
+type RegisterRequest struct {
+	Username     string `json:"username" binding:"required"`
+	Email        string `json:"email" binding:"required"`
+	Password     string `json:"password" binding:"required"`
+	ChatGPTToken string `json:"chatgpt_token"`
+}
+
+type LoginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
+type ChatGPTRequest struct {
+	Message        string `json:"message" binding:"required"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	Model          string `json:"model"`
+}
+
 // 全局变量
 var (
-	provider     llm.Provider
-	promptEngine *prompt.PromptEngine
-	ragEngine    *rag.RAGEngine
-	config       *utils.Config
-	logger       *logrus.Logger
+	provider      llm.Provider
+	promptEngine  *prompt.PromptEngine
+	ragEngine     *rag.RAGEngine
+	config        *utils.Config
+	logger        *logrus.Logger
+	authManager   *auth.AuthManager
+	chatGPTClient *chatgpt.ChatGPTClient
 )
 
 func main() {
@@ -108,6 +131,12 @@ func main() {
 }
 
 func initializeComponents() {
+	// 初始化认证管理器
+	authManager = auth.NewAuthManager("your-secret-key-here")
+
+	// 初始化 ChatGPT 客户端
+	chatGPTClient = chatgpt.NewChatGPTClient("https://chat.openai.com")
+
 	// 初始化 LLM 提供者
 	llmConfig := &llm.Config{
 		APIKey:      config.OpenAIAPIKey,
@@ -142,6 +171,19 @@ func setupRoutes(r *gin.Engine) {
 	// API 版本组
 	v1 := r.Group("/api/v1")
 	{
+		// 认证相关接口
+		v1.POST("/auth/register", handleRegister)
+		v1.POST("/auth/login", handleLogin)
+		v1.POST("/auth/logout", authManager.AuthMiddleware(), handleLogout)
+		v1.GET("/auth/profile", authManager.AuthMiddleware(), handleGetProfile)
+		v1.PUT("/auth/profile", authManager.AuthMiddleware(), handleUpdateProfile)
+
+		// ChatGPT 相关接口
+		v1.POST("/chatgpt/chat", authManager.AuthMiddleware(), handleChatGPTChat)
+		v1.GET("/chatgpt/conversations", authManager.AuthMiddleware(), handleGetConversations)
+		v1.GET("/chatgpt/conversations/:id", authManager.AuthMiddleware(), handleGetConversation)
+		v1.DELETE("/chatgpt/conversations/:id", authManager.AuthMiddleware(), handleDeleteConversation)
+
 		// 聊天接口
 		v1.POST("/chat", handleChat)
 
@@ -161,6 +203,148 @@ func setupRoutes(r *gin.Engine) {
 
 	// 根路径
 	r.GET("/", handleRoot)
+}
+
+// 认证相关处理器
+func handleRegister(c *gin.Context) {
+	var req RegisterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	user, err := authManager.RegisterUser(req.Username, req.Email, req.ChatGPTToken)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "User registered successfully",
+		"user":    user,
+	})
+}
+
+func handleLogin(c *gin.Context) {
+	var req LoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	session, err := authManager.LoginUser(req.Username, req.Password)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Login successful",
+		"session": session,
+	})
+}
+
+func handleLogout(c *gin.Context) {
+	user, _ := c.Get("user")
+	userObj := user.(*auth.User)
+
+	if err := authManager.LogoutUser(userObj.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Logout successful"})
+}
+
+func handleGetProfile(c *gin.Context) {
+	user, _ := c.Get("user")
+	c.JSON(http.StatusOK, gin.H{"user": user})
+}
+
+func handleUpdateProfile(c *gin.Context) {
+	user, _ := c.Get("user")
+	userObj := user.(*auth.User)
+
+	var updates map[string]interface{}
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	updatedUser, err := authManager.UpdateUser(userObj.ID, updates)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"user": updatedUser})
+}
+
+// ChatGPT 相关处理器
+func handleChatGPTChat(c *gin.Context) {
+	user, _ := c.Get("user")
+	userObj := user.(*auth.User)
+
+	var req ChatGPTRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 使用用户的 ChatGPT Token
+	chatReq := chatgpt.ChatRequest{
+		Message:        req.Message,
+		ConversationID: req.ConversationID,
+		Model:          req.Model,
+	}
+
+	response, err := chatGPTClient.SendMessage(userObj.ChatGPTToken, chatReq)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, response)
+}
+
+func handleGetConversations(c *gin.Context) {
+	user, _ := c.Get("user")
+	userObj := user.(*auth.User)
+
+	conversations, err := chatGPTClient.GetConversations(userObj.ChatGPTToken)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"conversations": conversations})
+}
+
+func handleGetConversation(c *gin.Context) {
+	user, _ := c.Get("user")
+	userObj := user.(*auth.User)
+	conversationID := c.Param("id")
+
+	conversation, err := chatGPTClient.GetConversation(userObj.ChatGPTToken, conversationID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, conversation)
+}
+
+func handleDeleteConversation(c *gin.Context) {
+	user, _ := c.Get("user")
+	userObj := user.(*auth.User)
+	conversationID := c.Param("id")
+
+	if err := chatGPTClient.DeleteConversation(userObj.ChatGPTToken, conversationID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Conversation deleted successfully"})
 }
 
 func handleChat(c *gin.Context) {
