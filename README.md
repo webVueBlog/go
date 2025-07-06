@@ -2,6 +2,8 @@
 
 一个用 Go 语言开发的大模型应用开发工具，提供类似 LangChain、RAG、Prompt Engineering 等功能，提升大模型应用开发效率。
 
+![img.png](./img.png)
+
 ## 功能特性
 
 - 🔗 **链式调用 (Chain)**: 支持多步骤串联处理
